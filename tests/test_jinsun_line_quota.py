@@ -100,6 +100,11 @@ class JinsunLineQuotaTest(unittest.TestCase):
         self.assertIn("skip metered push", source)
         self.assertIn('meta.get("job_id")', source)
         self.assertIn("force_push=cron_push", source)
+        self.assertIn("def outbound_messages", source)
+        self.assertIn("messages = outbound_messages(str(payload))", source)
+        self.assertIn("_LOADING_REFRESH_SECONDS", source)
+        self.assertIn("_maybe_start_loading", source)
+        self.assertIn("would flicker", source)
 
     def test_config_disables_streaming_and_interim(self) -> None:
         paths = [OVERLAY_CONFIG]
@@ -109,9 +114,12 @@ class JinsunLineQuotaTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("interim_assistant_messages: false", text, path)
             self.assertIn("long_running_notifications: false", text, path)
-            self.assertIn("tool_progress: off", text, path)
+            self.assertTrue(
+                "tool_progress: off" in text or "tool_progress: false" in text,
+                path,
+            )
             self.assertRegex(text, r"streaming:\s*\n(?:[^\n]*\n)*?\s+enabled: false", path.name)
-            self.assertIn("mode: off", text, path)
+            self.assertTrue("mode: off" in text or "mode: false" in text, path)
 
 
 if __name__ == "__main__":

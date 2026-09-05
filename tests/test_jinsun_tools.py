@@ -160,6 +160,26 @@ class JinsunScamGateTest(unittest.TestCase):
         self.assertEqual(found.group(2).strip(), "吃素")
         self.assertEqual(found.group(3).strip(), "吃葷")
 
+    def test_adapter_parses_confirm_after_look_reply_payload(self) -> None:
+        pat = adapter_parse_confirm()
+        sample = (
+            "新的表我填好了。姓名李大美，要參加，吃素，電話也填進去了。"
+            "這是示範表，不是公所正式系統。\n\n"
+            "表都填好了，要送出嗎？\n\n"
+            "【金孫兩個鍵】\n"
+            "題目：表都填好了，要送出嗎？\n"
+            "左：送出\n"
+            "右：先不要\n"
+            "【結束】\n"
+        )
+        found = pat.search(sample)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.group(1).strip(), "表都填好了，要送出嗎？")
+        self.assertEqual(found.group(2).strip(), "送出")
+        self.assertEqual(found.group(3).strip(), "先不要")
+        source = ADAPTER.read_text(encoding="utf-8")
+        self.assertIn("messages = outbound_messages(str(payload))", source)
+
 
 if __name__ == "__main__":
     unittest.main()

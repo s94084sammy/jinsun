@@ -643,6 +643,22 @@ def parse_jinsun_confirm(content: str) -> Optional[Tuple[str, str, str, str]]:
     return question, left, right, leftover
 
 
+def outbound_messages(content: str) -> List[Dict[str, Any]]:
+    """Turn model text into LINE objects. Two-button marker becomes Confirm."""
+    parsed = parse_jinsun_confirm(content)
+    if parsed:
+        question, left, right, leftover = parsed
+        question = merge_confirm_question(
+            question, strip_markdown_preserving_urls(leftover) if leftover else ""
+        )
+        return [build_jinsun_confirm_message(question, left, right)]
+    chunks = split_for_line(strip_markdown_preserving_urls(content or ""))
+    return [_text_message(c) for c in chunks][: max_messages_per_call()]
+
+
+_LOADING_REFRESH_SECONDS = 50
+
+
 def build_postback_button_message(
     text: str, button_label: str, request_id: str
 ) -> Dict[str, Any]:
@@ -822,6 +838,9 @@ class LineAdapter(BasePlatformAdapter):
         # Pending-button slot per chat — ensures one outstanding postback
         # button per chat at a time. Postback cache request_id keyed by chat_id.
         self._pending_buttons: Dict[str, str] = {}
+        # LINE loading animation restarts if we POST again. Heartbeat
+        # send_typing every second would flicker 輸入中. Remember last start.
+        self._last_loading_at: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -1078,9 +1097,9 @@ class LineAdapter(BasePlatformAdapter):
         else:
             text = f"[unsupported message type: {msg_type}]"
 
-        # Best-effort typing indicator (DM only).
+        # Best-effort typing indicator (DM only). Once per turn, not every second.
         if chat_type == "dm" and self._client:
-            asyncio.create_task(self._client.loading(chat_id))
+            asyncio.create_task(self._maybe_start_loading(chat_id))
 
         source_obj = self.build_source(
             chat_id=chat_id,
@@ -1135,8 +1154,9 @@ class LineAdapter(BasePlatformAdapter):
 
         if entry.state is State.READY:
             payload = entry.payload or ""
-            chunks = split_for_line(strip_markdown_preserving_urls(str(payload)))
-            messages = [_text_message(c) for c in chunks][: max_messages_per_call()]
+            messages = outbound_messages(str(payload))
+            if not messages:
+                return
             try:
                 await self._client.reply(reply_token, messages)
                 self._cache.mark_delivered(request_id)
@@ -1252,19 +1272,9 @@ class LineAdapter(BasePlatformAdapter):
         if not self._client:
             return SendResult(success=False, error="LINE adapter not connected")
 
-        parsed = parse_jinsun_confirm(content)
-        cap = max_messages_per_call()
-        if parsed:
-            question, left, right, leftover = parsed
-            question = merge_confirm_question(
-                question, strip_markdown_preserving_urls(leftover) if leftover else ""
-            )
-            messages = [build_jinsun_confirm_message(question, left, right)]
-        else:
-            chunks = split_for_line(strip_markdown_preserving_urls(content))
-            if not chunks:
-                return SendResult(success=True, message_id=None)
-            messages = [_text_message(c) for c in chunks][:cap]
+        messages = outbound_messages(content)
+        if not messages:
+            return SendResult(success=True, message_id=None)
 
         return await self._reply_or_optional_push(
             chat_id, messages, force_push=force_push
@@ -1315,10 +1325,20 @@ class LineAdapter(BasePlatformAdapter):
             return "", False
         return token, True
 
+    async def _maybe_start_loading(self, chat_id: str) -> None:
+        """Start LINE 輸入中 once. Restarting it every second makes it flicker."""
+        if not self._client or not chat_id:
+            return
+        now = time.time()
+        last = self._last_loading_at.get(chat_id, 0.0)
+        if now - last < _LOADING_REFRESH_SECONDS:
+            return
+        self._last_loading_at[chat_id] = now
+        await self._client.loading(chat_id, seconds=60)
+
     async def send_typing(self, chat_id: str, metadata=None) -> None:
-        """Trigger LINE's loading-animation indicator (DM only)."""
-        if self._client and chat_id:
-            await self._client.loading(chat_id)
+        """Hermes heartbeats this. Do not restart LINE loading every tick."""
+        await self._maybe_start_loading(chat_id)
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """Best-effort chat info derived from the chat_id prefix.
