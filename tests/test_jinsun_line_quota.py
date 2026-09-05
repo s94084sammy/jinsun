@@ -95,8 +95,11 @@ class JinsunLineQuotaTest(unittest.TestCase):
         source = ADAPTER.read_text(encoding="utf-8")
         self.assertIn("from .quota import", source)
         self.assertIn("allow_push", source)
+        self.assertIn("allow_cron_push", source)
         self.assertIn("swallow_system_ack", source)
         self.assertIn("skip metered push", source)
+        self.assertIn('meta.get("job_id")', source)
+        self.assertIn("force_push=cron_push", source)
 
     def test_config_disables_streaming_and_interim(self) -> None:
         paths = [OVERLAY_CONFIG]

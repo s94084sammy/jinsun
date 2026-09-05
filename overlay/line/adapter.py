@@ -1236,7 +1236,11 @@ class LineAdapter(BasePlatformAdapter):
             self._cache.set_ready(pending_rid, content)
             return SendResult(success=True, message_id=pending_rid)
 
-        return await self._send_text_chunks(chat_id, content, force_push=False)
+        # Hermes cron 經 live adapter 送時會帶 job_id。沒有回覆權杖，只能 Push。
+        # 對話仍走 allow_push（預設關）。排程只在 LINE_CRON_ALLOW_PUSH 開時才推。
+        meta = metadata or {}
+        cron_push = bool(meta.get("job_id")) and allow_cron_push()
+        return await self._send_text_chunks(chat_id, content, force_push=cron_push)
 
     async def _send_text_chunks(
         self,
