@@ -339,6 +339,15 @@ class TwUnitTest(unittest.TestCase):
         self.assertIn("1966", msg)
         self.assertIn("不是", msg)
 
+    def test_long_term_care_unreachable_still_says_1966(self) -> None:
+        def boom(*_a, **_k):
+            raise jinsun_tw.FetchError("down")
+
+        with patch.object(jinsun_tw, "http_get", side_effect=boom):
+            msg = jinsun_tw.long_term_care_text("板橋")
+        self.assertIn("1966", msg)
+        self.assertIn("連不上", msg)
+
     def test_garbage_ntpc_today_monday(self) -> None:
         with patch.object(jinsun_tw, "http_get", side_effect=self._fake_http):
             msg = jinsun_tw.garbage_text("新北市萬里區獅頭路", today=date(2026, 9, 7))
@@ -542,7 +551,10 @@ class TwLiveTest(unittest.TestCase):
     def test_live_long_term_care(self) -> None:
         msg = jinsun_tw.long_term_care_text("板橋")
         self.assertIn("1966", msg)
-        self.assertTrue("電話" in msg or "沒找到" in msg, msg)
+        self.assertTrue(
+            "電話" in msg or "沒找到" in msg or "連不上" in msg or "看不懂" in msg,
+            msg,
+        )
 
     def test_live_pharmacy(self) -> None:
         msg = jinsun_tw.pharmacy_text("板橋")

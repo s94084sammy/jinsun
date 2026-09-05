@@ -957,7 +957,7 @@ def long_term_care_text(place: str = "") -> str:
         )
         rows = _csv_rows(raw)
     except FetchError:
-        return NET_FAIL
+        return "長照名冊這會兒連不上。請打 1966。"
     except Exception:
         return "長照名冊這會兒看不懂。請打 1966。"
     hits = []
