@@ -14,4 +14,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run boundary tests
+        env:
+          TZ: Asia/Taipei
         run: python3 -m unittest discover -s tests -v

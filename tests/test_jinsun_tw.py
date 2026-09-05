@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -277,7 +277,10 @@ class TwUnitTest(unittest.TestCase):
         self.assertIn("5.2", msg)
 
     def test_disaster_filters_place(self) -> None:
-        with patch.object(jinsun_tw, "http_get", side_effect=self._fake_http):
+        frozen = datetime(2026, 9, 5, 10, 0, tzinfo=timezone(timedelta(hours=8)))
+        with patch.object(jinsun_tw, "http_get", side_effect=self._fake_http), patch.object(
+            jinsun_tw, "now_tw", return_value=frozen
+        ):
             penghu = jinsun_tw.disaster_text("澎湖")
             banqiao = jinsun_tw.disaster_text("板橋")
             tainan = jinsun_tw.disaster_text("臺南市")
@@ -524,7 +527,12 @@ class TwUnitTest(unittest.TestCase):
 
 
 class TwLiveTest(unittest.TestCase):
-    """真的打公開資料。天氣沒鑰匙時只驗證白話，不擋整批。"""
+    """真的打公開資料。GitHub 遠端常連不上台灣政府站，公開倉測試略過。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            raise unittest.SkipTest("公開倉不把政府網站連線當成過關條件")
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
