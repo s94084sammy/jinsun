@@ -77,6 +77,11 @@ class JinsunLineQuotaTest(unittest.TestCase):
         self.assertTrue(swallow_system_ack("⚡ Interrupting current run"))
         self.assertTrue(swallow_system_ack("⏳ Queued behind another job"))
         self.assertTrue(swallow_system_ack("⏩ Steered into current run"))
+        self.assertTrue(
+            swallow_system_ack(
+                "↪ Redirected current run. I'll adjust using your correction."
+            )
+        )
         self.assertFalse(swallow_system_ack("今天下雨，記得帶傘。"))
 
     def test_confirm_merges_leftover(self) -> None:
@@ -90,6 +95,15 @@ class JinsunLineQuotaTest(unittest.TestCase):
             "你住哪邊？我再幫你對一下那一區。",
         )
         self.assertEqual(merged.count("你住哪邊？"), 1)
+
+    def test_confirm_drops_duplicate_sentence(self) -> None:
+        merged = merge_confirm_question(
+            "素食已經勾好了。要送出這張表嗎？",
+            "素食已經勾好了。表上還有一格沒有題目，金孫沒有亂點。要送出請按下面的鍵。\n"
+            "素食已經勾好了。要送出這張表嗎？",
+        )
+        self.assertEqual(merged.count("素食已經勾好了。"), 1)
+        self.assertIn("要送出這張表嗎？", merged)
 
     def test_adapter_uses_quota_helpers(self) -> None:
         source = ADAPTER.read_text(encoding="utf-8")

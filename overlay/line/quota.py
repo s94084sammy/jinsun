@@ -14,6 +14,7 @@ Push、Multicast、Broadcast、Narrowcast 才計月額。
 from __future__ import annotations
 
 import os
+import re
 from typing import List
 
 LINE_SAFE_BUBBLE_CHARS = 4500
@@ -22,6 +23,15 @@ _SYSTEM_ACK_PREFIXES = (
     "⏳ Queued",
     "⏩ Steered",
     "💾",
+    "↪",
+)
+_SYSTEM_ACK_NEEDLES = (
+    "interrupting current",
+    "queued behind",
+    "steered into",
+    "redirected current run",
+    "i'll adjust using your correction",
+    "i’ll adjust using your correction",
 )
 
 
@@ -56,18 +66,43 @@ def swallow_system_ack(content: str) -> bool:
     """閘道忙碌回條不該送到 LINE，否則會用掉免費回覆權杖。"""
     if not content:
         return False
-    return any(content.startswith(prefix) for prefix in _SYSTEM_ACK_PREFIXES)
+    raw = content.strip()
+    if any(raw.startswith(prefix) for prefix in _SYSTEM_ACK_PREFIXES):
+        return True
+    low = raw.lower()
+    return any(needle in low for needle in _SYSTEM_ACK_NEEDLES)
+
+
+def collapse_repeated_sentences(text: str) -> str:
+    """同一句不要在一則裡出現第二次。"""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    parts = re.findall(r".+?(?:[。？！]|\n+|$)", text, flags=re.S)
+    kept: List[str] = []
+    seen = set()
+    for part in parts:
+        compact = re.sub(r"\s+", "", part.strip())
+        if not compact:
+            continue
+        if compact in seen:
+            continue
+        seen.add(compact)
+        kept.append(part.strip())
+    return "".join(kept).strip()
 
 
 def merge_confirm_question(question: str, leftover: str) -> str:
-    """兩個鍵與說明併成一則，不要先傳文字再傳按鍵。"""
+    """兩個鍵與說明併成一則，不要先傳文字再傳按鍵，也不要同一句講兩遍。"""
     question = (question or "").strip() or "請選一個"
-    leftover = (leftover or "").strip()
+    leftover = collapse_repeated_sentences((leftover or "").strip())
     if not leftover:
         return question
     if question in leftover:
         return leftover
-    return f"{leftover}\n{question}".strip()
+    if leftover.endswith(("嗎？", "嗎?", "鍵。", "鍵？", "鍵?")):
+        return leftover
+    return collapse_repeated_sentences(f"{leftover}\n{question}")
 
 
 def split_for_line(text: str, max_chars: int = LINE_SAFE_BUBBLE_CHARS) -> List[str]:
