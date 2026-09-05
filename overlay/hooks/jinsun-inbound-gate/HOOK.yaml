@@ -1,0 +1,4 @@
+name: jinsun-inbound-gate
+description: "金孫進線硬閘門備援。真正擋模型的是 LINE adapter；此 hook 再掃一次並寫入挡住紀錄。"
+events:
+  - agent:start

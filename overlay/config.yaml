@@ -1,0 +1,141 @@
+# 金孫 Hermes 設定。減法：不開其它聊天通道、不給長輩殼層與整台桌面代操作。
+# 瀏覽器代操作只在家裡這台電腦上填安全的表，不是遠端控制手機。
+# 模型只推前線檔：Grok（裝置碼）或 ChatGPT／Codex 訂閱（裝置碼）。
+# 這份示範預設 xai-oauth。不用 API 金鑰，不用 Gemini。不要為了省改便宜檔。
+
+model:
+  provider: xai-oauth
+  default: grok-4.6
+
+fallback_providers: []
+
+platform_toolsets:
+  cli:
+    - skills
+    - vision
+    - memory
+    - browser
+  line:
+    - skills
+    - vision
+    - browser
+    - web
+  cron:
+    - skills
+    - memory
+
+skills:
+  disabled:
+    - hermes-agent
+    - claude-code
+    - computer-use
+    - codex
+    - opencode
+  creation_nudge_interval: 0
+
+agent:
+  max_turns: 24
+  reasoning_effort: low
+  verbose: false
+  image_input_mode: auto
+  disabled_toolsets:
+    - terminal
+    - image_gen
+    - file
+    - code_execution
+    - computer_use
+  personalities:
+    jinsun: 你是金孫。對阿公阿嬤有禮貌、親切，像家裡孫子。台灣白話，一句話只問一件事，一次最多兩個鍵。數字用阿拉伯數字，例如 208、65 歲，不要寫二零八。同一段不要重複講。一次只回一則完整話。偶爾可以用一個表情符號，不要連發、不要一則塞好幾個、不要發 LINE 貼圖包。需要對方決定時用金孫兩個鍵。不要 Markdown、不要英文術語當預設回覆。可以在家裡電腦開瀏覽器幫填里民活動或 Google 表單。可以查天氣警報、空氣、假日、垃圾車、附近診所藥局長照據點、公車捷運台鐵下一班。不能掛號後端、不能繳費、不能當醫生。轉帳、驗證碼、銀行、健保、戶政一律擋下來請家人看。不是遠端操作長輩手機。
+
+terminal:
+  backend: local
+  timeout: 15
+  cwd: /opt/data/jinsun
+
+browser:
+  backend: off
+  inactivity_timeout: 120
+  use_real_profile: false
+  allow_private_urls: true
+  cdp_url: "http://172.25.0.1:19224"
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+stt:
+  enabled: true
+
+privacy:
+  redact_secrets: true
+
+mcp_servers:
+  jinsun:
+    command: /opt/hermes/.venv/bin/python
+    args:
+      - /opt/jinsun/mcp/jinsun_mcp.py
+    timeout: 60
+    env:
+      CWA_API_KEY: ${CWA_API_KEY}
+      TDX_CLIENT_ID: ${TDX_CLIENT_ID}
+      TDX_CLIENT_SECRET: ${TDX_CLIENT_SECRET}
+      MOENV_API_KEY: ${MOENV_API_KEY}
+      JINSUN_DATA: ${JINSUN_DATA}
+      TZ: Asia/Taipei
+
+streaming:
+  enabled: false
+  mode: off
+  transport: off
+
+platforms:
+  telegram:
+    enabled: false
+  discord:
+    enabled: false
+  slack:
+    enabled: false
+  whatsapp:
+    enabled: false
+  signal:
+    enabled: false
+  line:
+    enabled: true
+    extra:
+      host: "0.0.0.0"
+      port: 8646
+      slow_response_threshold: 40
+      pending_text: "金孫還在想。好了請按下面看回覆。"
+      button_label: "看回覆"
+      delivered_text: "這則已經回過了。"
+      interrupted_text: "這次沒做完，請再說一次。"
+
+gateway:
+  always_log_local: true
+  stt_enabled: true
+  stt_echo_transcripts: false
+  streaming:
+    enabled: false
+    mode: off
+
+display:
+  personality: jinsun
+  streaming: false
+  interim_assistant_messages: false
+  long_running_notifications: false
+  busy_ack_detail: false
+  busy_steer_ack_enabled: false
+  tool_progress: off
+  show_reasoning: false
+  platforms:
+    line:
+      streaming: false
+      interim_assistant_messages: false
+      long_running_notifications: false
+      busy_ack_detail: false
+      busy_steer_ack_enabled: false
+      tool_progress: off
+      show_reasoning: false
+
+cron:
+  timezone: Asia/Taipei

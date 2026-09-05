@@ -1,0 +1,83 @@
+# 金孫：家用 Docker。資料只掛 ./data，不用 host 網路，不掛其它 Hermes 家目錄。
+#
+# 這份打包使用 Hermes Agent v0.21.0（2026-08-31，上游 63279301）。
+# 映像 nousresearch/hermes-agent:latest
+# 摘要 sha256:76d5d17a201bb623268c02d43e397925e8f0127eb29b2e00fc48632d74945b05
+#
+# 第一次：
+#   ./scripts/bootstrap_data.sh
+#   docker compose up -d
+#
+# LINE webhook 只綁本機 18646。對外 HTTPS 請子女另外開隧道後，把公開網址寫進 .env 的 LINE_PUBLIC_URL。
+
+name: jinsun
+
+services:
+  jinsun:
+    image: nousresearch/hermes-agent:latest
+    container_name: jinsun
+    restart: unless-stopped
+    shm_size: "1gb"
+    networks:
+      - jinsun
+    extra_hosts:
+      # 容器若要連這台電腦上的真實 Chrome，把位址改成你家 Docker 橋接或 host-gateway。
+      - "host.docker.internal:172.25.0.1"
+    ports:
+      - "127.0.0.1:18646:8646"
+    environment:
+      HERMES_UID: ${HERMES_UID:-1000}
+      HERMES_GID: ${HERMES_GID:-1000}
+      TZ: Asia/Taipei
+      HOME: /opt/data
+      HERMES_HOME: /opt/data
+      LINE_HOST: "0.0.0.0"
+      LINE_PORT: "8646"
+      JINSUN_DATA: /opt/data/jinsun
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN:-}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET:-}
+      LINE_ALLOWED_USERS: ${LINE_ALLOWED_USERS:-}
+      LINE_HOME_CHANNEL: ${LINE_HOME_CHANNEL:-}
+      LINE_PUBLIC_URL: ${LINE_PUBLIC_URL:-}
+      LINE_ALLOW_ALL_USERS: ${LINE_ALLOW_ALL_USERS:-false}
+      LINE_ALLOW_PUSH: ${LINE_ALLOW_PUSH:-false}
+      LINE_CRON_ALLOW_PUSH: ${LINE_CRON_ALLOW_PUSH:-false}
+      LINE_MAX_MESSAGES_PER_CALL: ${LINE_MAX_MESSAGES_PER_CALL:-1}
+      LINE_SLOW_RESPONSE_THRESHOLD: ${LINE_SLOW_RESPONSE_THRESHOLD:-40}
+      CWA_API_KEY: ${CWA_API_KEY:-}
+      MOENV_API_KEY: ${MOENV_API_KEY:-}
+      TDX_CLIENT_ID: ${TDX_CLIENT_ID:-}
+      TDX_CLIENT_SECRET: ${TDX_CLIENT_SECRET:-}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/opt/data
+      - ./overlay/mcp:/opt/jinsun/mcp:ro
+      - ./overlay/line/adapter.py:/opt/hermes/plugins/platforms/line/adapter.py:ro
+      - ./overlay/line/quota.py:/opt/hermes/plugins/platforms/line/quota.py:ro
+      - ./overlay/hooks:/opt/data/hooks:ro
+      - ./overlay/blocked-skills/hermes-agent:/opt/hermes/skills/autonomous-ai-agents/hermes-agent:ro
+    command: ["gateway", "run"]
+    healthcheck:
+      test: ["CMD", "/opt/hermes/.venv/bin/hermes", "--version"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 45s
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: jinsun-tunnel
+    restart: unless-stopped
+    networks:
+      - jinsun
+    depends_on:
+      - jinsun
+    environment:
+      TUNNEL_TOKEN: ${JINSUN_TUNNEL_TOKEN}
+    command: ["tunnel", "--no-autoupdate", "run"]
+
+networks:
+  jinsun:
+    driver: bridge

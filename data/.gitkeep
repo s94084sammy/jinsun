@@ -1,0 +1,2 @@
+# 執行期資料目錄。docker compose 會把這裡掛進容器 /opt/data。
+# 不准掛到公司 ~/.hermes。
