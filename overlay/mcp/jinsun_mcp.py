@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -11,6 +12,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, urlopen
 
 import jinsun_tw
 
@@ -432,6 +435,297 @@ def browser_guard(url: str) -> str:
     return hit["reply"] if hit else "這件事我不能幫你做。請把手機拿給家人看。"
 
 
+def _cdp_base() -> str:
+    return (os.environ.get("JINSUN_CDP_HTTP") or "http://172.25.0.1:19224").rstrip("/")
+
+
+def _pick_chrome_tab(tabs: list, url: str) -> dict | None:
+    """優先用正在填的 viewform，不要誤抓到編輯頁或找不到網頁。"""
+    pages = [t for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+    if not pages:
+        return None
+    form_id = ""
+    found = re.search(r"/e/([^/]+)", url or "")
+    if found:
+        form_id = found.group(1)
+
+    def score(tab: dict) -> int:
+        u = tab.get("url") or ""
+        points = 0
+        if "docs.google.com/forms" in u:
+            points += 10
+        if "/viewform" in u:
+            points += 50
+        if form_id and form_id in u:
+            points += 20
+        if "/edit" in u or "formRestricted" in u or "/formR" in u:
+            points -= 80
+        return points
+
+    pages.sort(key=score, reverse=True)
+    return pages[0]
+
+
+def viewform_url(url: str) -> str:
+    found = re.search(r"/e/([^/]+)", url or "")
+    if not found:
+        return (url or "").split("#")[0]
+    return f"https://docs.google.com/forms/d/e/{found.group(1)}/viewform"
+
+
+def entries_from_load_data(data: Any) -> dict[str, str]:
+    """從 Google 表單 FB_PUBLIC_LOAD_DATA_ 取出欄位名稱對應的 entry 編號。"""
+    entries: dict[str, str] = {}
+    if not isinstance(data, list) or len(data) < 2:
+        return entries
+    block = data[1]
+    if not isinstance(block, list) or len(block) < 2:
+        return entries
+    questions = block[1]
+    if not isinstance(questions, list):
+        return entries
+    for question in questions:
+        if not isinstance(question, list) or len(question) < 5:
+            continue
+        title = str(question[1] or "").strip()
+        fields = question[4]
+        if not title or not isinstance(fields, list) or not fields:
+            continue
+        first = fields[0]
+        if not isinstance(first, list) or not first:
+            continue
+        entry_id = first[0]
+        if entry_id is not None:
+            entries[title] = str(entry_id)
+    return entries
+
+
+def build_prefill_url(viewform: str, entries: dict[str, str], values: dict[str, str]) -> str:
+    base = (viewform or "").split("?")[0]
+    params: list[tuple[str, str]] = [("usp", "pp_url")]
+    for title, entry_id in entries.items():
+        for key, val in values.items():
+            if key in title:
+                params.append((f"entry.{entry_id}", val))
+                break
+    if len(params) == 1:
+        return base
+    return base + "?" + urlencode(params, encoding="utf-8")
+
+
+def _run_async(coro):
+    """MCP 工具常在已有的事件迴圈裡，不能直接 asyncio.run。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result(timeout=50)
+
+
+def fill_google_form(
+    url: str,
+    name: str = "李大美",
+    contact: str = "0912123456",
+    attend: str = "參加",
+    meal: str = "吃素",
+    submit: bool = False,
+) -> str:
+    """在家裡真實 Chrome 一次填完公開 Google 表單。預設不送出。"""
+    target = (url or "").strip()
+    if not target:
+        return "沒有表單網址，金孫不知道要填哪一張。"
+    blocked = browser_url_blocked_reason(target) or looks_like_scam(target)
+    if blocked:
+        return "這件事我不能幫你做。請把手機拿給家人看。"
+    if "docs.google.com/forms" not in target:
+        return "這不是公開 Google 表單，金孫不這樣一次填。請改傳表單連結。"
+    name = (name or "").strip() or "李大美"
+    contact = (contact or "").strip() or "0912123456"
+    attend = (attend or "").strip() or "參加"
+    meal = (meal or "").strip() or "吃素"
+    try:
+        filled = _run_async(
+            _cdp_fill_google_form(target, name, contact, attend, meal, submit)
+        )
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}".strip()[:100]
+        return f"家裡瀏覽器這會兒沒填成。請看螢幕，或再說一次幫你填。{detail}"
+    if len(filled) < 4:
+        return "表打開了，但金孫沒填到格子。請看家裡螢幕。"
+    if submit:
+        return (
+            f"表已送出。姓名 {name}，聯絡 {contact}，{attend}，{meal}。"
+            "這是示範表，不是公所正式系統。"
+        )
+    return (
+        f"表一次填好了，還沒送出。姓名 {name}，聯絡 {contact}，{attend}，{meal}。"
+        "這是示範表，不是公所正式系統。要用兩個鍵問送出或先不要。"
+    )
+
+
+async def _cdp_fill_google_form(
+    url: str,
+    name: str,
+    contact: str,
+    attend: str,
+    meal: str,
+    submit: bool,
+) -> list[str]:
+    import aiohttp
+
+    values = {"姓名": name, "聯絡方式": contact, "是否參加": attend, "吃葷吃素": meal}
+    target = viewform_url(url)
+    base = _cdp_base()
+    parsed = urlparse(base)
+    ws_host = parsed.hostname or "172.25.0.1"
+    ws_port = parsed.port or 19224
+    req = Request(base + "/json/list", headers={"Host": f"{ws_host}:{ws_port}"})
+    with urlopen(req, timeout=5) as resp:
+        tabs = json.loads(resp.read().decode("utf-8"))
+    page = _pick_chrome_tab(tabs, target)
+    if not page or not page.get("webSocketDebuggerUrl"):
+        raise RuntimeError("沒有可用的 Chrome 分頁")
+    ws_url = re.sub(r"^ws://[^/]+", f"ws://{ws_host}:{ws_port}", page["webSocketDebuggerUrl"])
+    msg_id = 0
+
+    async def cdp(ws, method: str, params: dict | None = None, timeout: float = 20.0):
+        nonlocal msg_id
+        msg_id += 1
+        cur = msg_id
+        await ws.send_json({"id": cur, "method": method, "params": params or {}})
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            left = deadline - asyncio.get_event_loop().time()
+            if left <= 0:
+                raise TimeoutError(method)
+            raw = await asyncio.wait_for(ws.receive_json(), timeout=left)
+            if raw.get("id") == cur:
+                if raw.get("error"):
+                    raise RuntimeError(str(raw["error"])[:160])
+                return raw.get("result") or {}
+
+    async def eval_js(ws, expression: str, timeout: float = 12.0):
+        return await cdp(
+            ws,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True, "userGesture": True},
+            timeout=timeout,
+        )
+
+    async def wait_fields(ws) -> int:
+        found = 0
+        for _ in range(20):
+            try:
+                probe = await eval_js(
+                    ws,
+                    'document.querySelectorAll(\'div[role="listitem"]\').length',
+                    timeout=8.0,
+                )
+                found = (probe.get("result") or {}).get("value") or 0
+                if isinstance(found, int) and found >= 2:
+                    return found
+            except Exception:
+                pass
+            await asyncio.sleep(0.4)
+        return found if isinstance(found, int) else 0
+
+    async def mouse_click(ws, x: float, y: float) -> None:
+        for ev in ("mouseMoved", "mousePressed", "mouseReleased"):
+            params = {"type": ev, "x": x, "y": y, "button": "left"}
+            if ev != "mouseMoved":
+                params["clickCount"] = 1
+            await cdp(ws, "Input.dispatchMouseEvent", params)
+        await asyncio.sleep(0.15)
+
+    extract_js = """
+(() => {
+  const data = window.FB_PUBLIC_LOAD_DATA_;
+  const questions = (data && data[1] && data[1][1]) || [];
+  const entries = {};
+  for (const q of questions) {
+    if (!q || !q[1] || !q[4] || !q[4][0]) continue;
+    entries[String(q[1])] = String(q[4][0][0]);
+  }
+  return entries;
+})()
+"""
+    verify_js = f"""
+(() => {{
+  const values = {json.dumps(values, ensure_ascii=False)};
+  const done = [];
+  const blocks = Array.from(document.querySelectorAll('div[role="listitem"]'));
+  for (const block of blocks) {{
+    const heading = (block.querySelector('[role="heading"]') || {{}}).innerText || "";
+    const title = heading.split("\\n")[0].replace("*", "").trim();
+    let key = null;
+    for (const k of Object.keys(values)) {{
+      if (title.includes(k)) {{ key = k; break; }}
+    }}
+    if (!key) continue;
+    const val = values[key];
+    const radios = Array.from(block.querySelectorAll('[role="radio"]'));
+    if (radios.length) {{
+      const hit = radios.find((r) => (r.getAttribute("aria-label") || "").trim() === val);
+      if (hit && hit.getAttribute("aria-checked") === "true") done.push(title + "=" + val);
+      continue;
+    }}
+    const textInput = block.querySelector("input:not([type=hidden]):not([type=radio]), textarea");
+    if (textInput && String(textInput.value || "") === val) done.push(title + "=" + val);
+  }}
+  return done;
+}})()
+"""
+
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(ws_url, timeout=aiohttp.ClientTimeout(total=40)) as ws:
+            await cdp(ws, "Page.enable")
+            await cdp(ws, "Runtime.enable")
+            try:
+                await cdp(ws, "Page.bringToFront")
+            except Exception:
+                pass
+            if "/viewform" not in (page.get("url") or ""):
+                await cdp(ws, "Page.navigate", {"url": target})
+                await asyncio.sleep(1.0)
+            await wait_fields(ws)
+            extracted = await eval_js(ws, extract_js, timeout=8.0)
+            entries = (extracted.get("result") or {}).get("value") or {}
+            if not isinstance(entries, dict) or len(entries) < 2:
+                raise RuntimeError("讀不到這張表的欄位")
+            prefill = build_prefill_url(target, {str(k): str(v) for k, v in entries.items()}, values)
+            await cdp(ws, "Page.navigate", {"url": prefill})
+            await asyncio.sleep(1.0)
+            await wait_fields(ws)
+            verified = await eval_js(ws, verify_js, timeout=8.0)
+            done = (verified.get("result") or {}).get("value") or []
+            if not isinstance(done, list):
+                done = []
+            done = [str(v) for v in done]
+            if submit and len(done) >= 4:
+                loc = await eval_js(
+                    ws,
+                    """(() => {
+                      const btn = Array.from(document.querySelectorAll("div[role=button], span")).find((el) => {
+                        const t = (el.innerText || "").trim();
+                        return t === "提交" || t === "Submit";
+                      });
+                      if (!btn) return null;
+                      btn.scrollIntoView({ block: "center" });
+                      const rect = btn.getBoundingClientRect();
+                      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                    })()""",
+                    timeout=8.0,
+                )
+                point = (loc.get("result") or {}).get("value")
+                if point:
+                    await mouse_click(ws, float(point["x"]), float(point["y"]))
+    return done
+
+
+
 def intercept_inbound(text: str, *, persist: bool = True, note: str = "inbound-gate") -> Optional[dict]:
     """模型之前的硬閘門。命中就寫 blocks、回擋話，回傳 dict；沒命中回 None。"""
     reason = looks_like_scam(text)
@@ -525,6 +819,8 @@ def run_selftest() -> int:
     assert looks_like_scam("幫我轉帳到這個帳號") == "轉帳或匯款"
     assert browser_url_blocked_reason("https://example.com") is None
     assert browser_url_blocked_reason("https://docs.google.com/forms/d/abc") is None
+    assert "沒有表單" in fill_google_form("")
+    assert "不是公開 Google" in fill_google_form("https://example.com")
     assert browser_url_blocked_reason("https://www.esunbank.com.tw/login") == "銀行或支付網址"
     assert looks_like_scam("請打開 https://www.esunbank.com.tw") == "銀行或支付網址"
     due = due_reminder_text(now_tw().replace(hour=8, minute=0, second=0, microsecond=0))
@@ -575,6 +871,18 @@ def build_server():
     def jinsun_browser_guard(url: str) -> str:
         """瀏覽器打開網址前必問。銀行、健保、戶政、支付、驗證碼頁會擋。"""
         return browser_guard(url)
+
+    @server.tool()
+    def jinsun_fill_google_form(
+        url: str,
+        name: str = "李大美",
+        contact: str = "0912123456",
+        attend: str = "參加",
+        meal: str = "吃素",
+        submit: bool = False,
+    ) -> str:
+        """在家裡真實 Chrome 一次填完公開 Google 表單。不要一格一格點。沒說姓名就用李大美。預設不送出。"""
+        return fill_google_form(url, name, contact, attend, meal, submit)
 
     @server.tool()
     def jinsun_weather(place: str = "") -> str:

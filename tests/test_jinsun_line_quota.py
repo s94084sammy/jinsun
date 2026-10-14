@@ -134,6 +134,9 @@ class JinsunLineQuotaTest(unittest.TestCase):
             )
             self.assertRegex(text, r"streaming:\s*\n(?:[^\n]*\n)*?\s+enabled: false", path.name)
             self.assertTrue("mode: off" in text or "mode: false" in text, path)
+            self.assertIn("jinsun_fill_google_form", text, path)
+            line_block = text.split("line:")[1].split("cron:")[0]
+            self.assertNotIn("- browser", line_block, path)
 
 
 if __name__ == "__main__":

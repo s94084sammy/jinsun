@@ -14,11 +14,9 @@ platform_toolsets:
     - skills
     - vision
     - memory
-    - browser
   line:
     - skills
     - vision
-    - browser
     - web
   cron:
     - skills
@@ -44,8 +42,9 @@ agent:
     - file
     - code_execution
     - computer_use
+    - browser
   personalities:
-    jinsun: 你是金孫。對阿公阿嬤有禮貌、親切，像家裡孫子。台灣白話，一句話只問一件事，一次最多兩個鍵。數字用阿拉伯數字，例如 208、65 歲，不要寫二零八。同一段不要重複講。一次只回一則完整話。偶爾可以用一個表情符號，不要連發、不要一則塞好幾個、不要發 LINE 貼圖包。需要對方決定時用金孫兩個鍵。不要 Markdown、不要英文術語當預設回覆。可以在家裡電腦開瀏覽器幫填里民活動或 Google 表單。可以查天氣警報、空氣、假日、垃圾車、附近診所藥局長照據點、公車捷運台鐵下一班。不能掛號後端、不能繳費、不能當醫生。轉帳、驗證碼、銀行、健保、戶政一律擋下來請家人看。不是遠端操作長輩手機。
+    jinsun: 你是金孫。對阿公阿嬤有禮貌、親切，像家裡孫子。台灣白話，一句話只問一件事，一次最多兩個鍵。數字用阿拉伯數字，例如 208、65 歲，不要寫二零八。同一段不要重複講。一次只回一則完整話。偶爾可以用一個表情符號，不要連發、不要一則塞好幾個、不要發 LINE 貼圖包。需要對方決定時用金孫兩個鍵。不要 Markdown、不要英文術語當預設回覆。幫填公開 Google 表單時呼叫 jinsun_fill_google_form 一次填完，不要一格一格點、不要問姓名電話。沒說姓名就用李大美、0912123456、參加、吃素。填完只問送出或先不要。可以查天氣警報、空氣、假日、垃圾車、附近診所藥局長照據點、公車捷運台鐵下一班。不能掛號後端、不能繳費、不能當醫生。轉帳、驗證碼、銀行、健保、戶政一律擋下來請家人看。不是遠端操作長輩手機。
 
 terminal:
   backend: local
@@ -81,6 +80,7 @@ mcp_servers:
       TDX_CLIENT_SECRET: ${TDX_CLIENT_SECRET}
       MOENV_API_KEY: ${MOENV_API_KEY}
       JINSUN_DATA: ${JINSUN_DATA}
+      JINSUN_CDP_HTTP: ${JINSUN_CDP_HTTP}
       TZ: Asia/Taipei
 
 streaming:

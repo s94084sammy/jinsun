@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "overlay" / "mcp"))
 
+from unittest.mock import patch
+
 from jinsun_mcp import (  # noqa: E402
     add_family_reminder,
     ask_two_choices,
@@ -22,12 +24,17 @@ from jinsun_mcp import (  # noqa: E402
     browser_url_blocked_reason,
     count_blocks,
     due_reminder_text,
+    fill_google_form,
     intercept_inbound,
     latest_block,
     looks_like_scam,
     now_tw,
     register_activity,
     seed_demo,
+    _pick_chrome_tab,
+    build_prefill_url,
+    entries_from_load_data,
+    viewform_url,
 )
 
 ADAPTER = ROOT / "overlay" / "line" / "adapter.py"
@@ -179,6 +186,99 @@ class JinsunScamGateTest(unittest.TestCase):
         self.assertEqual(found.group(3).strip(), "先不要")
         source = ADAPTER.read_text(encoding="utf-8")
         self.assertIn("messages = outbound_messages(str(payload))", source)
+
+
+class JinsunFillGoogleFormTest(unittest.TestCase):
+    def test_picks_viewform_not_edit(self) -> None:
+        tabs = [
+            {"type": "page", "url": "https://docs.google.com/forms/d/e/abc/edit", "webSocketDebuggerUrl": "ws://x/1"},
+            {"type": "page", "url": "https://docs.google.com/forms/d/e/abc/viewform", "webSocketDebuggerUrl": "ws://x/2"},
+            {"type": "page", "url": "https://docs.google.com/forms/d/e/abc/formRestricted", "webSocketDebuggerUrl": "ws://x/3"},
+        ]
+        picked = _pick_chrome_tab(tabs, "https://docs.google.com/forms/d/e/abc/viewform")
+        self.assertIsNotNone(picked)
+        self.assertIn("/viewform", picked["url"])
+
+    def test_rejects_empty(self) -> None:
+        self.assertIn("沒有表單", fill_google_form(""))
+
+    def test_rejects_non_google(self) -> None:
+        self.assertIn("不是公開 Google", fill_google_form("https://example.com/form"))
+
+    def test_rejects_bank(self) -> None:
+        self.assertIn("家人", fill_google_form("https://www.esunbank.com.tw/login"))
+
+    def test_defaults_fill_once_without_submit(self) -> None:
+        async def fake(url, name, contact, attend, meal, submit):
+            self.assertIn("docs.google.com/forms", url)
+            self.assertEqual(name, "李大美")
+            self.assertEqual(contact, "0912123456")
+            self.assertEqual(attend, "參加")
+            self.assertEqual(meal, "吃素")
+            self.assertFalse(submit)
+            return ["姓名=李大美", "聯絡方式=0912123456", "是否參加=參加", "吃葷吃素=吃素"]
+
+        with patch("jinsun_mcp._cdp_fill_google_form", new=fake):
+            msg = fill_google_form(
+                "https://docs.google.com/forms/d/e/1FAIpQLSdlOQzFEvTz7ayEeyj5jxNrGHTXhvL8C6se0ReVaIwUWYILww"
+            )
+        self.assertIn("一次填好了", msg)
+        self.assertIn("李大美", msg)
+        self.assertIn("還沒送出", msg)
+        self.assertNotIn("表已送出", msg)
+
+    def test_submit_flag(self) -> None:
+        async def fake(*_args, **_kwargs):
+            return ["姓名=李大美", "聯絡方式=0912123456", "是否參加=參加", "吃葷吃素=吃素"]
+
+        with patch("jinsun_mcp._cdp_fill_google_form", new=fake):
+            msg = fill_google_form(
+                "https://docs.google.com/forms/d/e/abc",
+                submit=True,
+            )
+        self.assertIn("表已送出", msg)
+
+    def test_prefill_url_from_load_data(self) -> None:
+        data = [
+            None,
+            [
+                "說明",
+                [
+                    [1, "姓名", None, 0, [[1115659350, None, 1]]],
+                    [2, "聯絡方式", None, 0, [[1695631984, None, 1]]],
+                    [3, "是否參加", None, 2, [[1841919884, [["參加"], ["不參加"]], 1]]],
+                    [4, "吃葷吃素", None, 2, [[1848693813, [["吃葷"], ["吃素"]], 1]]],
+                ],
+            ],
+        ]
+        entries = entries_from_load_data(data)
+        self.assertEqual(entries["姓名"], "1115659350")
+        self.assertEqual(entries["吃葷吃素"], "1848693813")
+        url = build_prefill_url(
+            "https://docs.google.com/forms/d/e/abc/viewform?usp=sharing",
+            entries,
+            {"姓名": "李大美", "聯絡方式": "0912123456", "是否參加": "參加", "吃葷吃素": "吃素"},
+        )
+        from urllib.parse import unquote
+
+        self.assertIn("usp=pp_url", url)
+        self.assertIn("entry.1115659350=", url)
+        self.assertIn("李大美", unquote(url))
+        self.assertIn("entry.1848693813=", url)
+        self.assertTrue(viewform_url("https://docs.google.com/forms/d/e/abc/edit").endswith("/viewform"))
+
+    def test_skill_and_soul_say_fill_once(self) -> None:
+        skill = (ROOT / "overlay" / "skills" / "jinsun-fill-webpage" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        soul = (ROOT / "overlay" / "SOUL.md").read_text(encoding="utf-8")
+        config = (ROOT / "overlay" / "config.yaml").read_text(encoding="utf-8")
+        self.assertIn("jinsun_fill_google_form", skill)
+        self.assertIn("不要用瀏覽器一格一格點", skill)
+        self.assertIn("一次填完", soul)
+        self.assertIn("jinsun_fill_google_form", config)
+        self.assertNotIn("- browser", config.split("line:")[1].split("cron:")[0])
+        self.assertIn("- browser", config.split("disabled_toolsets:")[1].split("personalities:")[0])
 
 
 if __name__ == "__main__":
